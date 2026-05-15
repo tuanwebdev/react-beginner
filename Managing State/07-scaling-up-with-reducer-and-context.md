@@ -1,194 +1,527 @@
-Tất nhiên rồi, dưới đây là toàn bộ nội dung bài viết "Scaling Up with Reducer and Context" từ React.dev được trình bày dưới dạng markdown:
+# Scaling Up with Reducer and Context — React
+
+Nguồn: [React Docs - Scaling Up with Reducer and Context](https://react.dev/learn/scaling-up-with-reducer-and-context?utm_source=chatgpt.com)
 
 ---
 
-# Mở rộng với Reducer và Context
+# 1. Mục tiêu của bài học
 
-Reducer cho phép bạn hợp nhất logic cập nhật state của một component. Context cho phép bạn truyền thông tin sâu xuống các component khác. Bạn có thể kết hợp reducer và context cùng nhau để quản lý state của một màn hình phức tạp.
+React hướng dẫn cách:
 
-### Bạn sẽ học được
+* Kết hợp `useReducer` + `Context`
+* Tránh truyền props quá sâu (`prop drilling`)
+* Tổ chức state lớn rõ ràng hơn
+* Tách logic state khỏi UI component
 
-- Cách kết hợp reducer với context
-- Cách tránh truyền state và dispatch qua props
-- Cách giữ logic context và state trong một tệp riêng biệt
+---
 
-## Kết hợp reducer với context
+# 2. Vấn đề cần giải quyết
 
-Trong ví dụ này từ phần giới thiệu về reducer, state được quản lý bởi một reducer. Hàm reducer chứa tất cả logic cập nhật state và được khai báo ở cuối tệp này. Một reducer giúp các event handler ngắn gọn và súc tích. Tuy nhiên, khi ứng dụng của bạn phát triển, bạn có thể gặp một khó khăn khác. Hiện tại, state `tasks` và hàm `dispatch` chỉ khả dụng trong component `TaskApp` cấp cao nhất. Để các component khác có thể đọc danh sách công việc hoặc thay đổi nó, bạn phải truyền xuống một cách tường minh state hiện tại và các event handler (dùng để thay đổi state đó) dưới dạng props.
+Khi app nhỏ:
 
-Ví dụ: `TaskApp` truyền danh sách công việc và các event handler cho `TaskList`:
 ```jsx
-<TaskList
-  tasks={tasks}
-  onChangeTask={handleChangeTask}
-  onDeleteTask={handleDeleteTask}
-/>
+<App>
+  <TaskList tasks={tasks} />
+</App>
 ```
-Và `TaskList` truyền các event handler cho `Task`:
+
+→ truyền props bình thường là đủ.
+
+---
+
+Nhưng khi app lớn:
+
 ```jsx
-<Task
-  task={task}
-  onChange={onChangeTask}
-  onDelete={onDeleteTask}
-/>
+<App>
+  <Layout>
+    <Sidebar>
+      <Panel>
+        <TaskList />
+      </Panel>
+    </Sidebar>
+  </Layout>
+</App>
 ```
-Trong một ví dụ nhỏ như thế này, cách làm này hoạt động tốt, nhưng nếu bạn có hàng chục hoặc hàng trăm component ở giữa, việc truyền tất cả state và hàm xuống có thể khá bực bội!
 
-Đây là lý do tại sao, như một giải pháp thay thế cho việc truyền chúng qua props, bạn có thể muốn đặt cả state `tasks` và hàm `dispatch` vào trong context. **Bằng cách này, bất kỳ component nào bên dưới `TaskApp` trong cây đều có thể đọc `tasks` và gửi các action mà không cần "khoan prop" lặp đi lặp lại.**
+Nếu `TaskList` cần state:
 
-Dưới đây là cách bạn có thể kết hợp reducer với context:
+* phải truyền props qua rất nhiều component trung gian
+* gọi là:
 
-1.  **Tạo context.**
-2.  **Đặt state và dispatch vào context.**
-3.  **Sử dụng context ở bất kỳ đâu trong cây.**
+# Prop Drilling
 
-### Bước 1: Tạo context
+Ví dụ:
 
-Hook `useReducer` trả về `tasks` hiện tại và hàm `dispatch` cho phép bạn cập nhật chúng:
-```js
-const [tasks, dispatch] = useReducer(tasksReducer, initialTasks);
-```
-Để truyền chúng xuống cây, bạn sẽ tạo hai context riêng biệt:
-*   `TasksContext` cung cấp danh sách công việc hiện tại.
-*   `TasksDispatchContext` cung cấp hàm cho phép các component gửi action.
-
-Xuất chúng từ một tệp riêng để bạn có thể import chúng từ các tệp khác sau này:
-```js
-import { createContext } from 'react';
-
-export const TasksContext = createContext(null);
-export const TasksDispatchContext = createContext(null);
-```
-Ở đây, bạn đang truyền `null` làm giá trị mặc định cho cả hai context. Các giá trị thực tế sẽ được cung cấp bởi component `TaskApp`.
-
-### Bước 2: Đặt state và dispatch vào context
-
-Bây giờ bạn có thể import cả hai context trong component `TaskApp` của mình. Lấy `tasks` và `dispatch` được trả về bởi `useReducer()` và cung cấp chúng cho toàn bộ cây bên dưới:
 ```jsx
-import { TasksContext, TasksDispatchContext } from './TasksContext.js';
+<App tasks={tasks}>
+  <Layout tasks={tasks}>
+    <Sidebar tasks={tasks}>
+      <Panel tasks={tasks}>
+        <TaskList tasks={tasks} />
+      </Panel>
+    </Sidebar>
+  </Layout>
+</App>
+```
 
-export default function TaskApp() {
-  const [tasks, dispatch] = useReducer(tasksReducer, initialTasks);
-  // ...
-  return (
-    <TasksContext.Provider value={tasks}>
-      <TasksDispatchContext.Provider value={dispatch}>
-        ...
-      </TasksDispatchContext.Provider>
-    </TasksContext.Provider>
-  );
+Rất khó maintain.
+
+---
+
+# 3. Ý tưởng chính của React
+
+React đề xuất:
+
+| Hook         | Vai trò                         |
+| ------------ | ------------------------------- |
+| `useReducer` | quản lý logic state             |
+| `Context`    | truyền state toàn cây component |
+
+Kết hợp lại:
+
+```txt
+Reducer = quản lý state
+Context = phân phối state
+```
+
+---
+
+# 4. useReducer dùng để làm gì?
+
+`useReducer` giúp:
+
+* gom logic update state vào 1 chỗ
+* dễ quản lý state phức tạp
+* thay nhiều `useState`
+
+---
+
+## Cú pháp
+
+```jsx
+const [state, dispatch] = useReducer(reducer, initialState)
+```
+
+---
+
+## Reducer là gì?
+
+Reducer là function nhận:
+
+```jsx
+(state, action)
+```
+
+và trả về:
+
+```jsx
+newState
+```
+
+---
+
+## Ví dụ
+
+```jsx
+function tasksReducer(tasks, action) {
+  switch (action.type) {
+    case 'added':
+      return [...tasks, action.task]
+
+    case 'deleted':
+      return tasks.filter(t => t.id !== action.id)
+
+    default:
+      throw Error('Unknown action')
+  }
 }
 ```
-*(Lưu ý: Trong code gốc có sử dụng cú pháp rút gọn `<TasksContext value={tasks}>`, nhưng về bản chất nó là `<TasksContext.Provider value={tasks}>`)*. Hiện tại, bạn vẫn truyền thông tin qua cả props và context. Trong bước tiếp theo, bạn sẽ loại bỏ việc truyền prop.
 
-### Bước 3: Sử dụng context ở bất kỳ đâu trong cây
+---
 
-Bây giờ bạn không cần truyền danh sách công việc hoặc các event handler xuống cây nữa:
+# 5. dispatch là gì?
+
+`dispatch()` dùng để gửi action tới reducer.
+
+Ví dụ:
+
 ```jsx
-<TasksContext.Provider value={tasks}>
-  <TasksDispatchContext.Provider value={dispatch}>
-    <h1>Day off in Kyoto</h1>
-    <AddTask />
-    <TaskList />
-  </TasksDispatchContext.Provider>
-</TasksContext.Provider>
+dispatch({
+  type: 'added',
+  task: newTask
+})
 ```
-Thay vào đó, bất kỳ component nào cần danh sách công việc đều có thể đọc nó từ `TasksContext`:
-```js
-export default function TaskList() {
-  const tasks = useContext(TasksContext);
-  // ...
+
+Luồng hoạt động:
+
+```txt
+dispatch(action)
+    ↓
+reducer(state, action)
+    ↓
+newState
+    ↓
+React re-render
 ```
-Để cập nhật danh sách công việc, bất kỳ component nào cũng có thể đọc hàm `dispatch` từ context và gọi nó:
+
+---
+
+# 6. Context dùng để làm gì?
+
+Context giúp:
+
+* component con lấy data trực tiếp
+* không cần truyền props qua nhiều tầng
+
+---
+
+## Không dùng Context
+
+```txt
+App
+ ↓
+Layout
+ ↓
+Sidebar
+ ↓
+TaskList
+```
+
+props phải đi xuyên qua tất cả.
+
+---
+
+## Dùng Context
+
+```txt
+Context Provider
+      ↓
+mọi component bên dưới đều truy cập được
+```
+
+---
+
+# 7. React khuyên tạo 2 Context riêng
+
+React docs tạo:
+
 ```jsx
-export default function AddTask() {
-  const [text, setText] = useState('');
-  const dispatch = useContext(TasksDispatchContext);
-  // ...
-  return (
-    // ...
-    <button onClick={() => {
-      setText('');
-      dispatch({
-        type: 'added',
-        id: nextId++,
-        text: text,
-      });
-    }}>Add</button>
-    // ...
+export const TasksContext = createContext(null)
+export const TasksDispatchContext = createContext(null)
 ```
-Component `TaskApp` không truyền bất kỳ event handler nào xuống, và `TaskList` cũng không truyền event handler nào cho component `Task` nữa. Mỗi component tự đọc context mà nó cần. State vẫn "sống" trong component `TaskApp` cấp cao nhất, được quản lý bằng `useReducer`. Nhưng `tasks` và `dispatch` của nó giờ đã có sẵn cho mọi component bên dưới trong cây bằng cách import và sử dụng các context này.
 
-## Di chuyển tất cả kết nối vào một tệp duy nhất
+---
 
-Bạn không bắt buộc phải làm điều này, nhưng bạn có thể tiếp tục dọn dẹp các component bằng cách di chuyển cả reducer và context vào một tệp duy nhất. Hiện tại, `TasksContext.js` chỉ chứa hai khai báo context. Tệp này sắp trở nên "đông đúc" hơn! Bạn sẽ di chuyển reducer vào cùng tệp đó. Sau đó, bạn sẽ khai báo một component `TasksProvider` mới trong cùng tệp. Component này sẽ gắn kết tất cả các mảnh lại với nhau:
+## Vì sao tách riêng?
 
-1.  Nó sẽ quản lý state với một reducer.
-2.  Nó sẽ cung cấp cả hai context cho các component bên dưới.
-3.  Nó sẽ nhận `children` như một prop để bạn có thể truyền JSX vào đó.
+| Context              | Chứa              |
+| -------------------- | ----------------- |
+| TasksContext         | state             |
+| TasksDispatchContext | dispatch function |
+
+---
+
+## Lợi ích
+
+Component chỉ cần `dispatch`
+
+→ không re-render khi state đổi. ([Reddit][1])
+
+---
+
+# 8. Các bước kết hợp Reducer + Context
+
+---
+
+# Bước 1 — Tạo Context
+
+```jsx
+import { createContext } from 'react'
+
+export const TasksContext = createContext(null)
+export const TasksDispatchContext = createContext(null)
+```
+
+---
+
+# Bước 2 — Đưa state và dispatch vào Context
+
+```jsx
+<TasksContext value={tasks}>
+  <TasksDispatchContext value={dispatch}>
+    <App />
+  </TasksDispatchContext>
+</TasksContext>
+```
+
+---
+
+# Bước 3 — Component con dùng useContext
+
+## Đọc state
+
+```jsx
+const tasks = useContext(TasksContext)
+```
+
+---
+
+## Dispatch action
+
+```jsx
+const dispatch = useContext(TasksDispatchContext)
+
+dispatch({
+  type: 'deleted',
+  id: task.id
+})
+```
+
+---
+
+# 9. Luồng dữ liệu hoàn chỉnh
+
+```txt
+Component
+   ↓ dispatch(action)
+
+Reducer xử lý
+   ↓
+
+State mới
+   ↓
+
+Context cập nhật
+   ↓
+
+Component re-render
+```
+
+---
+
+# 10. Tư duy cực kỳ quan trọng
+
+## useReducer không thay Context
+
+Reducer:
+
+* chỉ quản lý logic state
+
+Context:
+
+* chỉ truyền state
+
+Chúng giải quyết 2 vấn đề khác nhau.
+
+---
+
+# 11. Provider Pattern
+
+React khuyên tạo component Provider riêng.
+
+---
+
+## Ví dụ
 
 ```jsx
 export function TasksProvider({ children }) {
-  const [tasks, dispatch] = useReducer(tasksReducer, initialTasks);
+  const [tasks, dispatch] = useReducer(tasksReducer, initialTasks)
 
   return (
-    <TasksContext.Provider value={tasks}>
-      <TasksDispatchContext.Provider value={dispatch}>
+    <TasksContext value={tasks}>
+      <TasksDispatchContext value={dispatch}>
         {children}
-      </TasksDispatchContext.Provider>
-    </TasksContext.Provider>
-  );
+      </TasksDispatchContext>
+    </TasksContext>
+  )
 }
 ```
-**Điều này loại bỏ tất cả sự phức tạp và kết nối khỏi component `TaskApp` của bạn:**
-```jsx
-import AddTask from './AddTask.js';
-import TaskList from './TaskList.js';
-import { TasksProvider } from './TasksContext.js';
 
-export default function TaskApp() {
-  return (
-    <TasksProvider>
-      <h1>Day off in Kyoto</h1>
-      <AddTask />
-      <TaskList />
-    </TasksProvider>
-  );
-}
+---
+
+## App trở nên sạch hơn
+
+```jsx
+<TasksProvider>
+  <TaskApp />
+</TasksProvider>
 ```
-Bạn cũng có thể xuất các hàm sử dụng context từ `TasksContext.js`:
-```js
+
+---
+
+# 12. Custom Hook
+
+React docs còn tạo:
+
+```jsx
 export function useTasks() {
-  return useContext(TasksContext);
+  return useContext(TasksContext)
 }
 
 export function useTasksDispatch() {
-  return useContext(TasksDispatchContext);
+  return useContext(TasksDispatchContext)
 }
 ```
-Khi một component cần đọc context, nó có thể làm điều đó thông qua các hàm này:
-```js
-const tasks = useTasks();
-const dispatch = useTasksDispatch();
+
+---
+
+## Lợi ích
+
+Component dễ đọc hơn:
+
+```jsx
+const tasks = useTasks()
+const dispatch = useTasksDispatch()
 ```
-Điều này không thay đổi hành vi theo bất kỳ cách nào, nhưng nó cho phép bạn sau này tách các context này sâu hơn hoặc thêm một số logic vào các hàm này. **Giờ đây, tất cả kết nối context và reducer đều nằm trong `TasksContext.js`. Điều này giữ cho các component sạch sẽ và gọn gàng, tập trung vào những gì chúng hiển thị hơn là nơi chúng lấy dữ liệu.**
 
-Bạn có thể coi `TasksProvider` như một phần của màn hình biết cách xử lý các công việc, `useTasks` như một cách để đọc chúng và `useTasksDispatch` như một cách để cập nhật chúng từ bất kỳ component nào bên dưới trong cây.
+thay vì:
 
-### Lưu ý
+```jsx
+const tasks = useContext(TasksContext)
+```
 
-Các hàm như `useTasks` và `useTasksDispatch` được gọi là **Custom Hooks**. Hàm của bạn được coi là custom Hook nếu tên của nó bắt đầu bằng `use`. Điều này cho phép bạn sử dụng các Hook khác, như `useContext`, bên trong nó.
+---
 
-Khi ứng dụng của bạn phát triển, bạn có thể có nhiều cặp context-reducer như thế này. Đây là một cách mạnh mẽ để mở rộng ứng dụng của bạn và **nâng state lên** mà không cần quá nhiều công sức mỗi khi bạn muốn truy cập dữ liệu ở sâu trong cây.
+# 13. Kiến trúc thư mục nên nhớ
 
-## Tóm tắt
+```txt
+src/
+ ├── context/
+ │    └── TasksContext.js
+ │
+ ├── components/
+ │    ├── AddTask.jsx
+ │    └── TaskList.jsx
+ │
+ └── App.jsx
+```
 
-- Bạn có thể kết hợp reducer với context để cho phép bất kỳ component nào đọc và cập nhật state phía trên nó.
-- Để cung cấp state và hàm dispatch cho các component bên dưới:
-    - Tạo hai context (cho state và cho hàm dispatch).
-    - Cung cấp cả hai context từ component sử dụng reducer.
-    - Sử dụng một trong hai context từ các component cần đọc chúng.
-- Bạn có thể dọn dẹp các component hơn nữa bằng cách di chuyển tất cả kết nối vào một tệp.
-    - Bạn có thể xuất một component như `TasksProvider` để cung cấp context.
-    - Bạn cũng có thể xuất các custom Hook như `useTasks` và `useTasksDispatch` để đọc nó.
-- Bạn có thể có nhiều cặp context-reducer như thế này trong ứng dụng của mình.
+---
+
+# 14. Khi nào nên dùng useReducer?
+
+Nên dùng khi:
+
+* state phức tạp
+* nhiều action update
+* nhiều component dùng chung state
+* logic update lớn
+
+([Reddit][2])
+
+---
+
+# 15. Khi nào KHÔNG nên dùng?
+
+Không cần nếu:
+
+* state nhỏ
+* component đơn giản
+* chỉ vài `useState`
+
+---
+
+# 16. Ưu điểm của mô hình này
+
+| Ưu điểm             | Ý nghĩa                   |
+| ------------------- | ------------------------- |
+| Tách logic          | UI sạch hơn               |
+| Tránh prop drilling | dễ maintain               |
+| Dễ scale            | app lớn vẫn rõ ràng       |
+| Centralized updates | mọi update đi qua reducer |
+| Predictable         | dễ debug                  |
+
+---
+
+# 17. Nhược điểm
+
+| Nhược điểm        | Giải thích                          |
+| ----------------- | ----------------------------------- |
+| Boilerplate nhiều | phải tạo reducer/context/actions    |
+| Có thể overkill   | app nhỏ không cần                   |
+| Re-render         | Context lớn có thể gây render nhiều |
+
+---
+
+# 18. Tư duy cốt lõi cần nhớ
+
+## React muốn bạn chia:
+
+```txt
+State Logic
+    ≠
+State Distribution
+```
+
+---
+
+## useReducer
+
+giải quyết:
+
+```txt
+State thay đổi như thế nào?
+```
+
+---
+
+## Context
+
+giải quyết:
+
+```txt
+Ai có thể truy cập state?
+```
+
+---
+
+# 19. Mô hình mental model chuẩn
+
+```txt
+Reducer
+  = bộ não xử lý state
+
+Dispatch
+  = gửi yêu cầu thay đổi
+
+Context
+  = hệ thống phân phối state
+
+Provider
+  = trung tâm cấp dữ liệu
+
+Custom Hook
+  = API đẹp để dùng state
+```
+
+---
+
+# 20. Recap ngắn gọn
+
+## Quy trình chuẩn
+
+```txt
+1. Tạo reducer
+2. useReducer()
+3. Tạo context
+4. Provider state + dispatch
+5. useContext() ở component con
+6. dispatch(action)
+```
+
+---
+
+# 21. Ý quan trọng nhất của bài
+
+React muốn bạn xây app theo hướng:
+
+```txt
+UI chỉ hiển thị
+Logic state nằm riêng
+```
+
+Đây là tư duy cực kỳ quan trọng khi làm app React lớn. ([react.dev][3])
+
+[1]: https://www.reddit.com/r/reactjs/comments/1cebqw7?utm_source=chatgpt.com "Scaling up React useReducer with Context"
+[2]: https://www.reddit.com/r/reactjs/comments/1d2nt8u?utm_source=chatgpt.com "Do you feel like reducers and context go hand in hand?"
+[3]: https://react.dev/learn/scaling-up-with-reducer-and-context?utm_source=chatgpt.com "Scaling Up with Reducer and Context – React"
